@@ -1,0 +1,23 @@
+# Architecture
+
+FastAPI/Python 3.12, aiogram 3, Celery/Redis 7, PostgreSQL 16, SQLAlchemy 2/Alembic, Next.js 16/TypeScript and Nginx. [README](../README.md) includes the component diagram and source ownership map.
+
+Text: authenticated Telegram private message → input validation → user/update identity → task+event+notification transaction → independent outbox dispatcher → Telegram confirmation and owner Redis channel → authenticated SSE → dashboard refetch. Dashboard writes follow the same task service/outbox transaction.
+
+Voice: metadata validation and quota admission → immediate bounded acknowledgment → PostgreSQL job+enqueue outbox → Redis `transcription` queue → short committed PROCESSING claim/event → locked download/actual audio validation/Whisper → atomic task+terminal job+event+notification → dispatcher. The provider never runs in Telegram ingestion. The `notifications` consumer stays available while transcription slots are busy. Maintenance reconciles and purges inside bounded dispatcher invocations; a separate unused maintenance service/queue is not added.
+
+Required states are QUEUED, PROCESSING, COMPLETED, FAILED, RETRYING, DEAD_LETTER and CANCELLED. Legacy TIMED_OUT is retained. Permanent invalid audio/output fails without pointless provider retries. Exhausted provider retries enter DEAD_LETTER, preserving reason; infrastructure failures commit retry budget after processing rollback and Celery retries with backoff. Stale PROCESSING claims are recovered after the lease window. Busy job locks prevent recovery interfering with live work. A unique task `source_key=voice:<job UUID>` prevents repeated creation/final-confirmation rows. Network delivery to Telegram remains at least once after an ambiguous crash.
+
+A consistent owner-before-job lock order coordinates admission, processing, retry and account deletion. PostgreSQL advisory admission serialization protects the global active-voice cap across different users. API lists paginate and use stable ID tie-breakers; indexes cover tenant-created/status and job-status/tenant queries. Migrations 0001–0004 create schema, durable effect retry deadlines/errors and profile timestamps/extended job states and indexed per-owner bot admission receipts. Production never runs create_all. Downgrade maps RETRYING→QUEUED and DEAD_LETTER→FAILED before restoring old checks/length; this loses lifecycle detail and requires stopped consumers plus a backup.
+
+Tasks, job metadata, hashed login codes and minimal profiles are tenant-owned and cascade on account erasure. No independent raw transcript copy is stored. Queue/SSE payloads carry IDs only. Events are ephemeral; subscribe-before-ready plus refetch-on-ready/reconnect recovers missed updates. JSON-only Celery, late acknowledgment and database reconciliation handle broker loss without trusting broker delivery as exactly once.
+
+Bot admission shares the replay ledger: 60 messages/commands per sliding minute, serialized by an owner NO KEY UPDATE lock. Invalid/non-private traffic never links a receipt to a user. The first exceeded message produces a cooldown notice; subsequent ones only retain replay identity. Account deletion sets receipt ownership to NULL rather than deleting replay IDs. A backward scan of tenant-created B-tree indexes serves descending queries; a duplicate DESC-only index is unnecessary.
+
+## Free local speech mode
+
+![Architecture](architecture.svg)
+
+`docker-compose.local-ai.yml` adds a checksum-verified model bootstrap and a private whisper.cpp server. It reuses the existing non-production provider endpoint override; task, queue and validation code is unchanged. Worker HTTP calls target `http://local-whisper:8080/v1/audio/transcriptions`; all app roles use a local-only placeholder key, model `tiny` and zero provider cost. One transcription child limits local CPU contention. The regular production configuration still requires official OpenAI.
+
+`docker-compose.local-ai-test.yml` reuses those services with the isolated integration database/Redis. `make test-local-ai` performs actual speech recognition of the public JFK sample, then checks one task, owner SSE, confirmation and zero provider estimate. Telegram HTTP is the only mocked network edge. The speech server has no host port, runs as UID 10001 on a read-only filesystem with dropped capabilities and CPU/memory limits. Its pinned upstream image is amd64 and is emulated by Docker Desktop on Apple Silicon. Model/sample downloads are pinned and SHA-256 checked; cached files live in a project-specific Docker volume, not Git.

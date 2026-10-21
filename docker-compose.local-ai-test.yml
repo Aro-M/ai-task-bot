@@ -1,0 +1,20 @@
+# Isolated, opt-in real local inference: no .env, real tokens or paid provider.
+services:
+  local-model:
+    extends: {file: docker-compose.local-ai.yml, service: local-model}
+  local-whisper:
+    extends: {file: docker-compose.local-ai.yml, service: local-whisper}
+  tests:
+    environment:
+      RUN_LOCAL_AI: "1"
+      PROVIDER_BASE_URL: http://local-whisper:8080/v1
+      OPENAI_API_KEY: local-only-not-an-openai-key
+      WHISPER_MODEL: base
+      WHISPER_COST_PER_MINUTE: "0"
+    volumes: ["local_ai_models:/fixtures/local-ai:ro"]
+    command: ["pytest", "tests/e2e/test_local_voice.py", "-s", "--junitxml=/tmp/reports/local-ai.xml", "-o", "cache_dir=/tmp/pytest-cache"]
+    depends_on:
+      local-whisper: {condition: service_healthy}
+
+volumes:
+  local_ai_models:

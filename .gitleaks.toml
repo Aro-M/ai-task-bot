@@ -1,0 +1,15 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Local environments and generated dependencies are outside the submitted source"
+paths = [
+  '''(^|/)\.venv/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.mypy_cache/''',
+  '''(^|/)\.ruff_cache/''',
+  '''(^|/)coverage/''',
+  '''(^|/)reports/''',
+  '''(^|/)playwright-report/''',
+  '''(^|/)test-results/''',
+]

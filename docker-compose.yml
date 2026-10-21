@@ -1,0 +1,104 @@
+x-worker-build: &worker-build
+  context: .
+  dockerfile: services/worker/Dockerfile
+  additional_contexts: {python-base: "service:migrate"}
+
+x-python: &python
+  build:
+    context: .
+    dockerfile: services/api/Dockerfile
+    additional_contexts: {python-base: "service:migrate"}
+  env_file: .env
+  restart: unless-stopped
+  init: true
+  security_opt: ["no-new-privileges:true"]
+  depends_on:
+    migrate: {condition: service_completed_successfully}
+    redis: {condition: service_healthy}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: taskbot
+      POSTGRES_DB: taskbot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskbot -d taskbot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes: ["redis_data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    build: .
+    env_file: .env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    <<: *python
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  bot:
+    <<: *python
+    build:
+      context: .
+      dockerfile: services/bot/Dockerfile
+      additional_contexts: {python-base: "service:migrate"}
+    command: ["uvicorn", "app.bot:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  worker:
+    <<: *python
+    build: *worker-build
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "--queues=transcription,celery", "--hostname=transcription@%h", "--loglevel=INFO", "--concurrency=${WORKER_CONCURRENCY:-4}"]
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+    stop_grace_period: 90s
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker.celery_app inspect ping --destination transcription@$$HOSTNAME --timeout 5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  dispatcher:
+    <<: *python
+    build: *worker-build
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "--queues=notifications,effects", "--hostname=notifications@%h", "--loglevel=INFO", "--concurrency=1"]
+    stop_grace_period: 110s
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker.celery_app inspect ping --destination notifications@$$HOSTNAME --timeout 5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  scheduler:
+    <<: *python
+    build: *worker-build
+    command: ["celery", "-A", "app.worker.celery_app", "beat", "--loglevel=WARNING", "--schedule=/tmp/celerybeat-schedule"]
+  frontend:
+    build: ./frontend
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      api: {condition: service_healthy}
+      bot: {condition: service_healthy}
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  postgres_data:
+  redis_data:

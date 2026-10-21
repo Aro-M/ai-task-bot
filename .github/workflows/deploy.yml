@@ -1,0 +1,51 @@
+name: Deploy approved immutable images
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+        required: true
+      image_sha:
+        description: Full commit SHA already published by the release workflow
+        required: true
+permissions:
+  contents: read
+  actions: read
+  packages: read
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+jobs:
+  deploy:
+    environment: ${{ inputs.environment }}
+    runs-on: [self-hosted, linux, "taskbot-${{ inputs.environment }}"]
+    timeout-minutes: 20
+    env:
+      RELEASE_SHA: ${{ inputs.image_sha }}
+      DEPLOY_DIRECTORY: ${{ vars.DEPLOY_DIRECTORY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Validate release identity and successful main CI
+        shell: bash
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test -n "$DEPLOY_DIRECTORY"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&status=success" --jq '.workflow_runs | any(.head_branch == "main" and .event == "push")' | grep -qx true
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.image_sha }}
+      - uses: astral-sh/setup-uv@v6
+        with: {version: "0.9.5"}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Migrate, deploy and run readiness smoke
+        shell: bash
+        run: |
+          uv sync --frozen --no-dev --python 3.12
+          uv run python -m scripts.deploy --environment "$DEPLOY_ENVIRONMENT" --tag "$RELEASE_SHA" --directory "$DEPLOY_DIRECTORY" --image-prefix "ghcr.io/${GITHUB_REPOSITORY,,}" --apply
+        env:
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}

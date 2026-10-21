@@ -1,0 +1,66 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: astral-sh/setup-uv@v6
+        with: {version: "0.9.5", enable-cache: true}
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - run: uv sync --frozen --python 3.12
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: npm ci
+        working-directory: frontend
+      - name: Formatting, lint, types
+        run: make lint
+      - name: Unit and security behavior tests with coverage
+        run: make test-unit
+      - name: Deterministic AI evaluations
+        run: uv run python -m scripts.evaluate_ai
+      - name: Check targeted security and integrity mutations
+        run: uv run python -m scripts.check_mutations > reports/mutations.json
+      - name: PostgreSQL, Redis, worker and end-to-end flows
+        run: make test-integration
+      - name: Dependency and static security scans
+        run: make test-security
+      - name: Scan repository history for secrets
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.3 detect --source /repo --redact --no-banner
+      - name: Dockerfile and dependency vulnerability checks
+        run: make test-containers
+      - name: Build deployable images
+        run: |
+          docker build --target runtime -t taskbot-api:ci .
+          docker build -t taskbot-frontend:ci frontend
+      - name: Browser tests
+        run: |
+          npx playwright install --with-deps chromium firefox webkit
+          npm run test:e2e
+        working-directory: frontend
+      - name: Browser journeys against the real isolated stack
+        run: make test-e2e-live
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: |
+            reports/
+            coverage.xml
+            frontend/coverage/
+            frontend/playwright-report/
+            frontend/test-results/
+            frontend/playwright-report-live/
+            frontend/test-results-live/
+      - name: Clean isolated services
+        if: always()
+        run: |
+          docker compose -p taskbot-test -f docker-compose.test.yml down -v
+          docker compose -p taskbot-qa --env-file tests/fixtures/qa.env -f docker-compose.yml -f docker-compose.qa.yml down -v

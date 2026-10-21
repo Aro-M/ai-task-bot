@@ -1,0 +1,76 @@
+# Optional development-only speech recognition. No OpenAI requests or API billing.
+x-local-image: &local-image
+  image: ghcr.io/ggml-org/whisper.cpp@sha256:b3a5ce497d31f8eef2f8d6a123f834d4217150d2dd2a391f37a6881f725036af
+  # The pinned upstream image publishes amd64; Docker Desktop emulates it on Apple Silicon.
+  platform: linux/amd64
+
+x-local-settings: &local-settings
+  PROVIDER_BASE_URL: http://local-whisper:8080/v1
+  OPENAI_API_KEY: local-only-not-an-openai-key
+  WHISPER_MODEL: base
+  WHISPER_COST_PER_MINUTE: "0"
+
+services:
+  local-model:
+    <<: *local-image
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 022
+        trap 'rm -f /models/*.part' EXIT
+        fetch() {
+          target="$$1"; checksum="$$2"; url="$$3"
+          if [ -f "$$target" ] && printf '%s  %s\n' "$$checksum" "$$target" | sha256sum -c - >/dev/null 2>&1; then
+            return
+          fi
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 600 "$$url" -o "$$target.part"
+          printf '%s  %s\n' "$$checksum" "$$target.part" | sha256sum -c -
+          mv "$$target.part" "$$target"
+        }
+        fetch /models/ggml-base.bin 60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin
+        fetch /models/jfk.wav 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.5/samples/jfk.wav
+    volumes: ["local_ai_models:/models"]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    restart: "no"
+  local-whisper:
+    <<: *local-image
+    entrypoint: ["whisper-server"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--model", "/models/ggml-base.bin", "--language", "auto", "--inference-path", "/v1/audio/transcriptions", "--no-gpu", "--threads", "2"]
+    user: "10001:10001"
+    volumes: ["local_ai_models:/models:ro"]
+    read_only: true
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: 1g
+    cpus: 2
+    init: true
+    restart: unless-stopped
+    depends_on:
+      local-model: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+  migrate:
+    environment: *local-settings
+  api:
+    environment: *local-settings
+  bot:
+    environment: *local-settings
+  worker:
+    environment: *local-settings
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "--queues=transcription,celery", "--hostname=transcription@%h", "--loglevel=INFO", "--concurrency=1"]
+    depends_on:
+      local-whisper: {condition: service_healthy}
+  dispatcher:
+    environment: *local-settings
+  scheduler:
+    environment: *local-settings
+
+volumes:
+  local_ai_models:

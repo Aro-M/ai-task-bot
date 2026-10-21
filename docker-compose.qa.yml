@@ -1,0 +1,54 @@
+# Overlay only for disposable browser QA, with no live external credentials.
+x-qa-env: &qa-env
+  ENVIRONMENT: test
+  DATABASE_URL: postgresql+asyncpg://taskbot:qa-only-password@postgres:5432/taskbot_test
+  REDIS_URL: redis://redis:6379/15
+  JWT_SECRET: qa-only-secret-at-least-32-characters-long
+  TELEGRAM_BOT_TOKEN: "123456:test-bot-token"
+  WEBHOOK_SECRET: qa-webhook-secret
+  OPENAI_API_KEY: ""
+  FRONTEND_ORIGIN: ${TASKBOT_QA_ORIGIN:-http://localhost:18080}
+
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: taskbot_test
+      POSTGRES_PASSWORD: qa-only-password
+    volumes: !reset []
+    tmpfs: ["/var/lib/postgresql/data"]
+  redis:
+    volumes: !reset []
+    tmpfs: ["/data"]
+  migrate:
+    env_file: !reset []
+    environment: *qa-env
+  api:
+    env_file: !reset []
+    environment: *qa-env
+  bot:
+    env_file: !reset []
+    environment: *qa-env
+  worker:
+    env_file: !reset []
+    environment: *qa-env
+  scheduler:
+    env_file: !reset []
+    environment: *qa-env
+  dispatcher:
+    env_file: !reset []
+    environment: *qa-env
+  frontend:
+    ports: !override ["127.0.0.1:18080:8080"]
+  qa-control:
+    build: {context: ., target: test}
+    environment: *qa-env
+    command: ["uvicorn", "tests.browser_support:app", "--host", "0.0.0.0", "--port", "8002", "--no-access-log"]
+    ports: ["127.0.0.1:18081:8002"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8002/openapi.json"]
+      interval: 2s
+      timeout: 3s
+      retries: 20

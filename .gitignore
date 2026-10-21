@@ -1,0 +1,54 @@
+# Credentials and machine-specific environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python dependencies, bytecode and local databases
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.db
+*.db-shm
+*.db-wal
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+
+# Test evidence, coverage, recordings and local model caches
+.coverage*
+coverage.xml
+htmlcov/
+coverage/
+reports/
+.local/
+.cache/
+/models/
+/recordings/
+*.log
+*.dump
+*.sql.gz
+
+# JavaScript dependencies and generated frontend output
+node_modules/
+dist/
+frontend/.next/
+frontend/out/
+frontend/nginx.generated.conf
+*.tsbuildinfo
+playwright-report/
+playwright-report-live/
+test-results/
+test-results-live/
+
+# Editors and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+*~

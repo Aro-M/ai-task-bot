@@ -1,0 +1,21 @@
+# Operator release overlay: use immutable published images, never build on the server.
+x-release-python: &release-python
+  image: ${TASKBOT_IMAGE_PREFIX:?Set image prefix}/api:${TASKBOT_IMAGE_TAG:?Set commit SHA}
+  build: !reset null
+
+services:
+  migrate:
+    <<: *release-python
+  api:
+    <<: *release-python
+  bot:
+    <<: *release-python
+  worker:
+    <<: *release-python
+  dispatcher:
+    <<: *release-python
+  scheduler:
+    <<: *release-python
+  frontend:
+    image: ${TASKBOT_IMAGE_PREFIX:?Set image prefix}/frontend:${TASKBOT_IMAGE_TAG:?Set commit SHA}
+    build: !reset null

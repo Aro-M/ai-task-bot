@@ -1,0 +1,36 @@
+# Entirely isolated test infrastructure: no host ports, no .env, no live providers.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test-only-password
+      POSTGRES_DB: taskbot_test
+    tmpfs: ["/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d taskbot_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  tests:
+    build: {context: ., target: test}
+    environment:
+      ENVIRONMENT: test
+      DATABASE_URL: postgresql+asyncpg://test:test-only-password@postgres:5432/taskbot_test
+      REDIS_URL: redis://redis:6379/15
+      JWT_SECRET: test-only-secret-at-least-32-characters-long
+      WEBHOOK_SECRET: test-webhook-secret
+      TELEGRAM_BOT_TOKEN: 123456:test-bot-token
+      OPENAI_API_KEY: test-only-key
+      FRONTEND_ORIGIN: http://test
+      RUN_INTEGRATION: "1"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}

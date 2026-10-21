@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1450" height="760" viewBox="0 0 1450 760" role="img" aria-labelledby="title desc">
+<title id="title">Taskroom architecture</title>
+<desc id="desc">Telegram messages become durable tasks or voice jobs. An outbox dispatches Redis work and notifications. Celery validates audio and calls local Whisper or the optional OpenAI API. PostgreSQL stores tasks; Redis events reach the Next.js dashboard through authenticated FastAPI SSE.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#617185" stroke-width="1.5"/></marker></defs>
+<rect width="1450" height="760" fill="#f7f9fc"/>
+<g font-family="Arial, sans-serif" fill="#243347">
+<text x="50" y="43" font-size="27" font-weight="700">Taskroom · how a message becomes a task</text>
+<text x="50" y="71" font-size="15" fill="#617185">Database-owned work · independent speech processing · private live updates</text>
+<path d="M270 165 H330" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<text x="273" y="148" font-size="13" fill="#516276">messages</text>
+<path d="M550 165 H610" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="556" y="148" font-size="13" fill="#516276">commit</text>
+<path d="M830 165 H890" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="837" y="148" font-size="13" fill="#516276">outbox</text>
+<path d="M1110 165 H1170" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1115" y="148" font-size="13" fill="#516276">dispatch</text>
+<path d="M1000 120 V98 H160 V120" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="645" y="94" font-size="13" fill="#516276">confirmations to Telegram</text>
+<path d="M1280 210 V380" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1292" y="325" font-size="13" fill="#516276">job ID</text>
+<path d="M270 425 H330" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<text x="273" y="370" font-size="13" fill="#516276">REST + SSE</text>
+<path d="M440 380 V270 H720 V210" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<text x="475" y="257" font-size="13" fill="#516276">owner queries / writes</text>
+<path d="M1170 425 H850 V300 H790 V210" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="870" y="412" font-size="13" fill="#516276">task + job + outbox transaction</text>
+<path d="M1230 210 V325 H495 V380" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+<text x="590" y="348" font-size="13" fill="#516276">owner event → authenticated SSE → refetch</text>
+<path d="M1280 470 V570" fill="none" stroke="#617185" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1293" y="530" font-size="13" fill="#516276">validated audio</text>
+<g id="telegram"><rect x="50" y="120" width="220" height="90" rx="13" fill="#edf7ff" stroke="#3972a5" stroke-width="1.5"/><text x="67" y="155" font-size="18" font-weight="700">Telegram</text><text x="67" y="183" font-size="12.5" fill="#516276">Text · voice · login</text></g>
+<g id="bot"><rect x="330" y="120" width="220" height="90" rx="13" fill="#edf7ff" stroke="#3972a5" stroke-width="1.5"/><text x="347" y="155" font-size="18" font-weight="700">Bot · aiogram 3</text><text x="347" y="183" font-size="12.5" fill="#516276">Validate · admit · deduplicate</text></g>
+<g id="db"><rect x="610" y="120" width="220" height="90" rx="13" fill="#fff6e8" stroke="#b77a21" stroke-width="1.5"/><text x="627" y="155" font-size="18" font-weight="700">PostgreSQL</text><text x="627" y="183" font-size="12.5" fill="#516276">Tasks · jobs · durable outbox</text></g>
+<g id="dispatcher"><rect x="890" y="120" width="220" height="90" rx="13" fill="#fff6e8" stroke="#b77a21" stroke-width="1.5"/><text x="907" y="155" font-size="18" font-weight="700">Outbox dispatcher</text><text x="907" y="183" font-size="12.5" fill="#516276">Deliver · retry · reconcile</text></g>
+<g id="redis"><rect x="1170" y="120" width="220" height="90" rx="13" fill="#fff6e8" stroke="#b77a21" stroke-width="1.5"/><text x="1187" y="155" font-size="18" font-weight="700">Redis</text><text x="1187" y="183" font-size="12.5" fill="#516276">Queues · per-user events</text></g>
+<g id="dashboard"><rect x="50" y="380" width="220" height="90" rx="13" fill="#edf7ff" stroke="#3972a5" stroke-width="1.5"/><text x="67" y="415" font-size="18" font-weight="700">Dashboard · Next.js</text><text x="67" y="443" font-size="12.5" fill="#516276">Create · edit · complete</text></g>
+<g id="api"><rect x="330" y="380" width="220" height="90" rx="13" fill="#edf7ff" stroke="#3972a5" stroke-width="1.5"/><text x="347" y="415" font-size="18" font-weight="700">FastAPI</text><text x="347" y="443" font-size="12.5" fill="#516276">Session · ownership · SSE</text></g>
+<g id="worker"><rect x="1170" y="380" width="220" height="90" rx="13" fill="#edf7ff" stroke="#3972a5" stroke-width="1.5"/><text x="1187" y="415" font-size="18" font-weight="700">Celery worker</text><text x="1187" y="443" font-size="12.5" fill="#516276">Download · validate · create</text></g>
+<g id="speech"><rect x="890" y="570" width="500" height="115" rx="13" fill="#edf8f0" stroke="#388257" stroke-width="1.5"/>
+<text x="912" y="603" font-size="19" font-weight="700">Choose the speech service</text>
+<text x="912" y="633" font-size="16" fill="#28724a">Local whisper.cpp · free · audio stays on this machine</text>
+<text x="912" y="659" font-size="14" fill="#617185">Default alternative: OpenAI Whisper API · paid per usage</text></g>
+<rect x="50" y="570" width="740" height="115" rx="13" fill="#fff" stroke="#dbe2ea"/>
+<text x="72" y="602" font-size="16" font-weight="700">Text never needs a speech provider.</text>
+<text x="72" y="630" font-size="14" fill="#617185">Task + event commit together. Retries cannot create a second voice task.</text>
+<text x="72" y="656" font-size="14" fill="#617185">Dashed path: live updates. Reconnect always refetches current task data.</text>
+<text x="50" y="727" font-size="13" fill="#617185">Only the frontend is exposed on localhost:8080. Database, Redis and local speech stay on the private Docker network.</text>
+</g></svg>
