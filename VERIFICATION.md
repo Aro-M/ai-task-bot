@@ -62,6 +62,7 @@ Native macOS իրական-stack suite-ում Chromium-ը և WebKit-ն անցել
 5. Նախորդ hosted CI-ն կանգնել էր QA-ի հին API IP-ը reserve անելու Docker քայլում։ Disposable QA ցանցն այժմ ունի explicit subnet, և դրա deterministic parser-ը հստակ անջատում է paid AI կախվածությունը։ API replacement-ի ստուգումն անցել է տեղային երկու միջավայրում։
 6. `dateTime.ts`-ը դուրս էր frontend coverage include-ից։ Այն ավելացվել է, և malformed local date-ի վավերացման դեպքը ստուգվում է։
 7. Backend Docker context-ից այժմ ճիշտ բացառվում են նաև live browser-ի report/trace պանակները։
+8. Առաջին նոր hosted run-ում (`b6bbafd`, [39679425343](https://github.com/Aro-M/ai-task-bot/actions/runs/39679425343)) բոլոր երեք իրական-stack browser թեստերն անցել են, բայց workflow-ը ձախողվել է հետագա cleanup-ում․ `cd frontend`-ը փոխում էր EXIT trap-ի աշխատանքային պանակը, և այն չէր գտնում `tests/fixtures/qa.env`-ը։ Make target-ը browser քայլն այժմ գործարկում է subshell-ում, որպեսզի cleanup-ը կատարվի repository root-ից և պահպանի թեստի իրական exit status-ը։ Վերջնական CI-ի արդյունքը ստուգվում է նոր commit-ի run-ով։
 
 README-ում ավելացված են BotFather-ից սկսվող տեղադրում, `.env`-ի լրացում, API billing-ի և quota-ի տարբերություն, հիմնական/անվճար ռեժիմներ, Telegram login, թարմացում/դադարեցում, խափանման լուծումներ, architecture Mermaid և 5 հայերեն + 5 անգլերեն երկար manual acceptance տեքստ՝ սպասվող դաշտերով։
 

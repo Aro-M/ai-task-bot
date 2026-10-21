@@ -17,7 +17,7 @@ test-e2e-live:
 	@set -e; trap 'docker compose -p taskbot-qa --env-file tests/fixtures/qa.env -f docker-compose.yml -f docker-compose.qa.yml down -v' EXIT; \
 	docker compose -p taskbot-qa --env-file tests/fixtures/qa.env -f docker-compose.yml -f docker-compose.qa.yml up --build -d --wait frontend qa-control; \
 	uv run python -m tests.operations; \
-	cd frontend && npm run test:e2e:live
+	(cd frontend && npm run test:e2e:live)
 test-mutations:
 	uv run python -m scripts.check_mutations
 test-security:
