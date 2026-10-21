@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Outbox, Priority, Task, TaskSource, TaskStatus, utcnow
 from app.schemas import TaskCreate, TaskPatch, normalize_text
+from app.timezone import TASK_TIMEZONE
 
 __all__ = [
     "DomainError",
@@ -189,10 +190,11 @@ def extract_fields(text: str, now: datetime | None = None) -> dict[str, Any]:
         result["title"] = heading.rsplit(" ", 1)[0] if " " in heading else heading
         result["description"] = text
     lower = (dictated.get("due date", "") if dictated else text).casefold()
-    now = now or datetime.now(UTC)
+    now = now or datetime.now(TASK_TIMEZONE)
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("Extraction clock must include a timezone")
-    now = now.astimezone(UTC)
+    now = now.astimezone(TASK_TIMEZONE)
+    date_timezone = UTC if re.search(r"\b(?:utc|gmt)\b", lower) else TASK_TIMEZONE
     date = None
     if dictated:
         named_date = re.match(
@@ -211,15 +213,19 @@ def extract_fields(text: str, now: datetime | None = None) -> dict[str, Any]:
     iso = re.search(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)", lower)
     if iso:
         try:
-            date = datetime.strptime(iso.group(1), "%Y-%m-%d").replace(tzinfo=UTC)
+            date = datetime.strptime(iso.group(1), "%Y-%m-%d").replace(
+                tzinfo=date_timezone
+            )
         except ValueError:
             pass
     elif re.search(r"\btomorrow\b|(?<!\w)վաղը(?!\w)", lower):
         date = (now + timedelta(days=1)).replace(
-            hour=0, minute=0, second=0, microsecond=0
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=date_timezone
         )
     elif re.search(r"\btoday\b|(?<!\w)այսօր(?!\w)", lower):
-        date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        date = now.replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=date_timezone
+        )
     if date is not None:
         hours = "one two three four five six seven eight nine ten eleven twelve".split()
         clock_text = re.sub(r"\b([ap])\.?\s*m\b\.?", r"\1m", lower)
@@ -269,7 +275,7 @@ def extract_fields(text: str, now: datetime | None = None) -> dict[str, Any]:
             clock_text,
         ):
             raise DomainError(
-                "Please use an explicit due date and AM/PM or 24-hour time in UTC"
+                "Please use an explicit due date and AM/PM or 24-hour time; deadlines default to Yerevan time"
             )
         clock = re.search(rf"(?<![\d:]){clock_pattern}", clock_text)
         military = re.search(rf"(?<!\d){military_pattern}(?!\d)", clock_text)
@@ -280,7 +286,7 @@ def extract_fields(text: str, now: datetime | None = None) -> dict[str, Any]:
             date = date.replace(
                 hour=int(military.group(1)), minute=int(military.group(2))
             )
-        result["due_date"] = date
+        result["due_date"] = date.astimezone(UTC)
     if dictated and "due date" in dictated and date is None:
         raise DomainError(
             "Say due date today, tomorrow, YYYY-MM-DD, or a month/day with the year; add AM/PM for a time"

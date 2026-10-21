@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from './api';
+import { TASK_TIME_ZONE } from './dateTime';
 import { Dialog, TaskDialog } from './TaskDialog';
 import {
   sourceLabels,
@@ -766,9 +767,15 @@ function TaskCard({
             {task.created_at && (
               <time
                 dateTime={task.created_at}
-                title={new Date(task.created_at).toLocaleString()}
+                title={new Date(task.created_at).toLocaleString(undefined, {
+                  timeZone: TASK_TIME_ZONE,
+                  timeZoneName: 'short',
+                })}
               >
-                Created {new Date(task.created_at).toLocaleDateString()}
+                Created{' '}
+                {new Date(task.created_at).toLocaleDateString(undefined, {
+                  timeZone: TASK_TIME_ZONE,
+                })}
               </time>
             )}
             {task.priority && (
@@ -798,16 +805,18 @@ function TaskCard({
         {task.due_date ? (
           <time
             dateTime={task.due_date}
-            title={new Date(task.due_date).toLocaleString()}
+            title={new Date(task.due_date).toLocaleString(undefined, {
+              timeZone: TASK_TIME_ZONE,
+              timeZoneName: 'short',
+            })}
           >
-            {new Date(task.due_date).toLocaleDateString(undefined, {
+            {new Date(task.due_date).toLocaleString(undefined, {
+              timeZone: TASK_TIME_ZONE,
               month: 'short',
               day: 'numeric',
-              year:
-                new Date(task.due_date).getFullYear() ===
-                new Date().getFullYear()
-                  ? undefined
-                  : 'numeric',
+              year: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
             })}
             {overdue && <span>Overdue</span>}
           </time>

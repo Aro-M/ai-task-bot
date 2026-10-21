@@ -18,6 +18,7 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.ai import TaskParserError, parse_task
 from app.audio import (
     AudioError,
     convert_audio,
@@ -36,8 +37,8 @@ from app.db import CONNECT_ARGS
 from app.events import job_id_from_payload, publish_event
 from app.logging import configure_logging, exception_context
 from app.models import JobStatus, Outbox, Task, TranscriptionJob, User
-from app.schemas import TaskCreate
-from app.services import DomainError, clean_transcript, create_task, extract_fields
+from app.services import DomainError, clean_transcript, create_task
+from app.timezone import TASK_TIMEZONE
 
 logger = logging.getLogger(__name__)
 configure_logging()
@@ -278,57 +279,69 @@ async def _process_job(job_id: str) -> None:
                 job.detected_language = language
                 job.estimated_cost = duration / 60 * settings.whisper_cost_per_minute
                 text = clean_transcript(transcript)
-                task = await create_task(
-                    session,
-                    job.user_id,
-                    TaskCreate(**extract_fields(text)),
-                    source="TELEGRAM_VOICE",
-                    source_key=f"voice:{job.id}",
-                )
-                job.status = JobStatus.COMPLETED
                 armenian = language in {"hy", "armenian", "Armenian"}
-                created_label, description_label, due_label, priority_label = (
-                    (
-                        "✅ Ձայնից ստեղծվեց առաջադրանք՝",
-                        "Նկարագրություն",
-                        "Վերջնաժամկետ (UTC)",
-                        "Առաջնահերթություն",
-                    )
-                    if armenian
-                    else (
-                        "✅ Task created from your voice message:",
-                        "Description",
-                        "Due date (UTC)",
-                        "Priority",
-                    )
-                )
-                confirmation = [f"{created_label}\n{task.title}"]
-                if task.description:
-                    preview = task.description[:1000]
-                    if len(task.description) > 1000:
-                        preview += (
-                            "… (ամբողջ նկարագրությունը՝ վահանակում)"
+                data = await parse_task(text)
+                if data is None:
+                    job.status = JobStatus.COMPLETED
+                    notify(
+                        session,
+                        job.user_id,
+                        job.chat_id,
+                        (
+                            "Ձայնը լսեցի, բայց առաջադրանքի գործողություն չգտա։ "
+                            "Ասա՝ ինչ պետք է անեմ։"
                             if armenian
-                            else "… (full description in dashboard)"
-                        )
-                    confirmation.append(f"{description_label}: {preview}")
-                if task.due_date:
-                    confirmation.append(f"{due_label}: {task.due_date:%Y-%m-%d %H:%M}")
-                if task.priority:
-                    priority = (
-                        {"HIGH": "բարձր", "MEDIUM": "միջին", "LOW": "ցածր"}[
-                            task.priority
-                        ]
-                        if armenian
-                        else task.priority
+                            else "I heard your message, but couldn't identify a task. "
+                            "Tell me what action to add."
+                        ),
                     )
-                    confirmation.append(f"{priority_label}: {priority}")
-                notify(
-                    session,
-                    job.user_id,
-                    job.chat_id,
-                    "\n".join(confirmation),
-                )
+                else:
+                    task = await create_task(
+                        session,
+                        job.user_id,
+                        data,
+                        source="TELEGRAM_VOICE",
+                        source_key=f"voice:{job.id}",
+                    )
+                    job.status = JobStatus.COMPLETED
+                    created_label, description_label, due_label, priority_label = (
+                        (
+                            "✅ Ձայնից ստեղծվեց առաջադրանք՝",
+                            "Նկարագրություն",
+                            "Վերջնաժամկետ (Երևանի ժամանակով)",
+                            "Առաջնահերթություն",
+                        )
+                        if armenian
+                        else (
+                            "✅ Task created from your voice message:",
+                            "Description",
+                            "Due date (Yerevan time)",
+                            "Priority",
+                        )
+                    )
+                    confirmation = [f"{created_label}\n{task.title}"]
+                    if task.description:
+                        preview = task.description[:1000]
+                        if len(task.description) > 1000:
+                            preview += (
+                                "… (ամբողջ նկարագրությունը՝ վահանակում)"
+                                if armenian
+                                else "… (full description in dashboard)"
+                            )
+                        confirmation.append(f"{description_label}: {preview}")
+                    if task.due_date:
+                        due_date = task.due_date.astimezone(TASK_TIMEZONE)
+                        confirmation.append(f"{due_label}: {due_date:%Y-%m-%d %H:%M}")
+                    if task.priority:
+                        priority = (
+                            {"HIGH": "բարձր", "MEDIUM": "միջին", "LOW": "ցածր"}[
+                                task.priority
+                            ]
+                            if armenian
+                            else task.priority
+                        )
+                        confirmation.append(f"{priority_label}: {priority}")
+                    notify(session, job.user_id, job.chat_id, "\n".join(confirmation))
         except TimeoutError:
             job.status, job.error_code = JobStatus.TIMED_OUT, "timeout"
             job.error_message = "Transcription exceeded the time limit."
@@ -340,22 +353,25 @@ async def _process_job(job_id: str) -> None:
                 and exc.code in {"provider_unavailable", "download_unavailable"}
                 else JobStatus.FAILED
             )
-            job.error_code = (
-                exc.code
-                if isinstance(exc, AudioError)
-                else (
-                    "download_failed"
-                    if isinstance(exc, httpx.HTTPError)
-                    else "invalid_transcript"
-                )
-            )
+            if isinstance(exc, AudioError):
+                job.error_code = exc.code
+            elif isinstance(exc, TaskParserError):
+                job.error_code = "task_parse_failed"
+            elif isinstance(exc, httpx.HTTPError):
+                job.error_code = "download_failed"
+            else:
+                job.error_code = "invalid_transcript"
             job.error_message = "Audio could not be converted into a task."
             notify(
                 session,
                 job.user_id,
                 job.chat_id,
                 (
-                    f"❌ {exc}. Please send your task as text."
+                    (
+                        str(exc)
+                        if isinstance(exc, TaskParserError)
+                        else f"❌ {exc}. Please send your task as text."
+                    )
                     if isinstance(exc, DomainError)
                     else FALLBACK
                 ),

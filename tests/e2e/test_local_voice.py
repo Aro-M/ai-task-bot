@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -19,6 +19,7 @@ from app import bot, worker
 from app.auth import create_token
 from app.config import settings
 from app.models import Outbox, Task, TranscriptionJob
+from app.timezone import TASK_TIMEZONE
 from tests.integration.conftest import next_event, telegram_update
 
 pytestmark = [
@@ -37,7 +38,7 @@ async def test_local_speech_voice_queue_task_sse_and_confirmation(
     stack, live_api, monkeypatch, structured
 ):
     assert settings.provider_base_url == "http://local-whisper:8080/v1"
-    assert settings.openai_api_key == "local-only-not-an-openai-key"
+    assert settings.openai_api_key == "test-only-key"
     assert settings.whisper_cost_per_minute == 0
     factory, _, _, owner, _ = stack
     speech = Path(
@@ -45,7 +46,7 @@ async def test_local_speech_voice_queue_task_sse_and_confirmation(
         if structured
         else "/fixtures/local-ai/jfk.wav"
     ).read_bytes()
-    tomorrow = (datetime.now(UTC) + timedelta(days=1)).date()
+    tomorrow = (datetime.now(TASK_TIMEZONE) + timedelta(days=1)).date()
     queue = f"local-speech-{uuid4().hex}"
     monkeypatch.setattr(bot, "send_message", AsyncMock())
     monkeypatch.setattr(worker.celery_app.conf, "task_default_queue", queue)
@@ -121,9 +122,10 @@ async def test_local_speech_voice_queue_task_sse_and_confirmation(
                                 tasks[0].description.casefold() == "discuss the report"
                             )
                             assert tasks[0].priority == "HIGH"
-                            assert tasks[0].due_date.date() == tomorrow
-                            assert tasks[0].due_date.hour == 18
-                            assert tasks[0].due_date.minute == 0
+                            due = tasks[0].due_date.astimezone(TASK_TIMEZONE)
+                            assert due.date() == tomorrow
+                            assert due.hour == 18
+                            assert due.minute == 0
                         else:
                             assert (
                                 "country" in tasks[0].title.lower()
@@ -143,7 +145,7 @@ async def test_local_speech_voice_queue_task_sse_and_confirmation(
                     if structured:
                         confirmation = bot.send_message.await_args.args[1]
                         assert "Priority: HIGH" in confirmation
-                        assert "Due date (UTC):" in confirmation
+                        assert "Due date (Yerevan time):" in confirmation
                         assert "discuss the report" in confirmation.casefold()
         print(
             json.dumps(

@@ -7,7 +7,7 @@ Python 3.12/FastAPI, aiogram 3, SQLAlchemy 2/Alembic/PostgreSQL 16, Celery/Redis
 - `app/config.py`, `db.py`, `models.py`, `schemas.py`, `services.py`: validated settings, persistence, schemas and task invariants. Service helpers flush; the caller commits. Production migrations own schema creation.
 - `app/api.py`, `auth.py`: authenticated tenant context, Origin/CSRF, rate limits, safe errors and SSE. Clients cannot supply an owner identity. Foreign-owner access returns 403; missing task returns 404.
 - `app/bot.py`: aiogram transport, polling/webhook ingestion, metadata validation, update identity, user profile updates and durable enqueue. Polling offset advances after successful database commit; use one polling replica.
-- `app/worker.py`, `audio.py`, `events.py`: committed job claim, bounded processing/retries, secure temporary audio, outbox and per-owner events. Never transcribe in the bot handler.
+- `app/worker.py`, `audio.py`, `events.py`: committed job claim, bounded processing/retries, secure temporary audio, outbox and per-owner events. Never transcribe in the bot handler. `app/ai.py` owns validated task extraction for text and voice; `app/timezone.py` owns Yerevan deadline interpretation.
 - `frontend/src/api.ts`, `types.ts`, `App.tsx`, `TaskDialog.tsx`, `app/`: cookie API client, shared types, accessible dashboard and Next entry points. Static production export uses generated inline hydration script hashes in Nginx CSP.
 
 ## Data and API
@@ -32,4 +32,4 @@ Outbox effects commit with task/job changes, retry with persisted deadlines (inc
 
 Bot admission: `BOT_MESSAGES_PER_MINUTE=60` is a centralized fixed policy in `app/config.py`. The indexed `ProcessedUpdate(user_id,created_at)` ledger counts all private updates in a sliding minute under an owner lock; duplicates do not renew the window. The first excess update creates one cooldown notice. Owner association is nullable and SET NULL on erasure, retaining replay identities.
 
-Optional free development speech reuses the existing provider HTTP contract via docker-compose.local-ai.yml. The overlay substitutes a local-only key/URL, model tiny, zero per-minute provider estimate and one transcription child. Production host restrictions stay intact. `make test-local-ai` exercises actual local inference in isolated test services; ordinary CI skips that additional case.
+Optional free development speech reuses the existing provider HTTP contract via docker-compose.local-ai.yml. The overlay substitutes a local-only key/URL, model base, disabled generative task parsing, zero per-minute provider estimate and one transcription child. Production host restrictions stay intact. `make test-local-ai` exercises actual local inference in isolated test services; ordinary CI skips that additional case.

@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.config import settings
 from app.models import Base
 
 
@@ -36,3 +37,9 @@ def aiohttp_mock_compatibility(monkeypatch):
         "ClientResponse",
         partial(aiohttp.ClientResponse, stream_writer=SimpleNamespace(output_size=0)),
     )
+
+
+@pytest.fixture(autouse=True)
+def disable_live_task_parser(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "test-only-key")
+    monkeypatch.setattr(settings, "task_parser_enabled", False)

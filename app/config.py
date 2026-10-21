@@ -29,7 +29,10 @@ class Settings(BaseSettings):
     webhook_secret: str = ""
     openai_api_key: str = ""
     provider_base_url: str = "https://api.openai.com/v1"
-    whisper_model: str = "whisper-1"
+    task_parser_enabled: bool = True
+    task_parser_model: str = "gpt-6-luna"
+    task_parser_timeout_sec: int = Field(default=15, ge=1, le=60)
+    whisper_model: str = "gpt-transcribe"
     whisper_language: str = "auto"
     whisper_timeout_sec: int = Field(default=45, ge=1, le=600)
     whisper_max_retries: int = Field(default=3, ge=1, le=5)
@@ -42,7 +45,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     frontend_origin: str = "http://localhost:8080"
     daily_transcription_limit: int = Field(
-        default=50,
+        default=500,
         ge=1,
         validation_alias=AliasChoices(
             "DAILY_TRANSCRIPTION_LIMIT_PER_USER", "DAILY_TRANSCRIPTION_LIMIT"
@@ -56,9 +59,9 @@ class Settings(BaseSettings):
         ),
     )
     global_queued_jobs_limit: int = Field(default=1000, ge=1)
-    hourly_transcription_limit: int = Field(default=10, ge=1)
+    hourly_transcription_limit: int = Field(default=500, ge=1)
     global_ai_requests_per_minute: int = Field(default=60, ge=1)
-    whisper_cost_per_minute: float = Field(default=0.006, ge=0)
+    whisper_cost_per_minute: float = Field(default=0.0045, ge=0)
 
     @model_validator(mode="after")
     def production_safety(self) -> "Settings":

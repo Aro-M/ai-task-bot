@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app import audio, bot, worker
 from app.events import encode_event, job_id_from_payload
 from app.models import Outbox, Task, TranscriptionJob, User
+from app.schemas import TaskCreate
 from app.services import DomainError
 
 
@@ -134,6 +135,40 @@ async def test_long_telegram_text_preserves_message_in_description(pipeline):
         assert 1 <= len(task.title) <= 300
 
 
+async def test_text_route_uses_shared_parser_fields(pipeline, monkeypatch):
+    parsed = TaskCreate(
+        title="Call Anna",
+        description="Discuss the report",
+        due_date=datetime(2026, 10, 22, 14, tzinfo=UTC),
+        priority="HIGH",
+    )
+    monkeypatch.setattr(bot, "parse_task", AsyncMock(return_value=parsed))
+
+    await bot.handle_update(update(text="Please call Anna tomorrow at 14:00."))
+
+    bot.parse_task.assert_awaited_once_with("Please call Anna tomorrow at 14:00.")
+    async with pipeline() as session:
+        task = await session.scalar(select(Task))
+        assert (task.title, task.description, task.due_date, task.priority) == (
+            "Call Anna",
+            "Discuss the report",
+            datetime(2026, 10, 22, 14, tzinfo=UTC),
+            "HIGH",
+        )
+
+
+async def test_text_route_does_not_create_task_for_conversation(pipeline, monkeypatch):
+    monkeypatch.setattr(bot, "parse_task", AsyncMock(return_value=None))
+
+    await bot.handle_update(update(text="How are you today?"))
+
+    bot.parse_task.assert_awaited_once_with("How are you today?")
+    async with pipeline() as session:
+        assert await session.scalar(select(func.count()).select_from(Task)) == 0
+        row = await session.scalar(select(Outbox).where(Outbox.kind == "notification"))
+        assert "I didn't create a task" in row.payload["text"]
+
+
 @pytest.mark.parametrize(
     "message,expected",
     [
@@ -188,8 +223,8 @@ async def test_voice_ack_precedes_job_commit(pipeline, monkeypatch):
     event.listen(
         pipeline.kw["bind"].sync_engine,
         "before_cursor_execute",
-        lambda conn, cursor, statement, parameters, context, executemany: statements.append(
-            statement
+        lambda conn, cursor, statement, parameters, context, executemany: (
+            statements.append(statement)
         ),
     )
 
@@ -259,6 +294,73 @@ async def test_worker_success_is_atomic_and_duplicate_safe(pipeline, queued_job)
     worker.transcribe_audio.assert_awaited_once()
 
 
+async def test_voice_route_uses_same_parser_as_text(pipeline, queued_job, monkeypatch):
+    parsed = TaskCreate(
+        title="Call Anna",
+        description="Discuss the report",
+        due_date=datetime(2026, 10, 22, 14, tzinfo=UTC),
+        priority="HIGH",
+    )
+    monkeypatch.setattr(worker, "parse_task", AsyncMock(return_value=parsed))
+
+    await worker.process_job(queued_job)
+
+    worker.parse_task.assert_awaited_once_with("Call Anna tomorrow")
+    async with pipeline() as session:
+        task = await session.scalar(select(Task))
+        assert (task.title, task.description, task.due_date, task.priority) == (
+            "Call Anna",
+            "Discuss the report",
+            datetime(2026, 10, 22, 14, tzinfo=UTC),
+            "HIGH",
+        )
+        assert (await session.get(TranscriptionJob, queued_job)).status == "COMPLETED"
+
+
+async def test_voice_parser_error_is_recorded_without_retry(
+    pipeline, queued_job, monkeypatch
+):
+    monkeypatch.setattr(
+        worker,
+        "parse_task",
+        AsyncMock(side_effect=worker.TaskParserError("Try again / Կրկին փորձիր", 503)),
+    )
+
+    await worker.process_job(queued_job)
+
+    async with pipeline() as session:
+        job = await session.get(TranscriptionJob, queued_job)
+        assert job.status == "FAILED"
+        assert job.error_code == "task_parse_failed"
+        assert job.retry_count == 0
+        notifications = list(
+            await session.scalars(select(Outbox).where(Outbox.kind == "notification"))
+        )
+        assert any(
+            "Try again / Կրկին փորձիր" in row.payload["text"] for row in notifications
+        )
+
+
+async def test_voice_route_does_not_create_task_for_conversation(
+    pipeline, queued_job, monkeypatch
+):
+    worker.transcribe_audio.return_value = ("How are you today?", "english")
+    monkeypatch.setattr(worker, "parse_task", AsyncMock(return_value=None))
+
+    await worker.process_job(queued_job)
+
+    worker.parse_task.assert_awaited_once_with("How are you today?")
+    async with pipeline() as session:
+        assert await session.scalar(select(func.count()).select_from(Task)) == 0
+        assert (await session.get(TranscriptionJob, queued_job)).status == "COMPLETED"
+        notifications = list(
+            await session.scalars(select(Outbox).where(Outbox.kind == "notification"))
+        )
+        assert any(
+            "couldn't identify a task" in row.payload["text"] for row in notifications
+        )
+
+
 async def test_worker_preserves_medium_voice_transcript(pipeline, queued_job):
     transcript = "Զանգել Աննային և քննարկել զեկույցի մանրամասները։ " * 20
     worker.transcribe_audio.return_value = (transcript, "armenian")
@@ -282,7 +384,7 @@ async def test_worker_saves_all_dictated_fields_once(pipeline, queued_job):
         task = (await session.scalars(select(Task))).one()
         assert task.title == "Prepare report"
         assert task.description == "Include the sales figures"
-        assert task.due_date == datetime(2026, 12, 31, 18, 30, tzinfo=UTC)
+        assert task.due_date == datetime(2026, 12, 31, 14, 30, tzinfo=UTC)
         assert task.priority == "HIGH" and task.status == "PENDING"
         assert task.source == "TELEGRAM_VOICE"
         assert (await session.get(TranscriptionJob, queued_job)).status == "COMPLETED"
@@ -299,7 +401,7 @@ async def test_worker_saves_all_dictated_fields_once(pipeline, queued_job):
             if "Task created" in row.payload["text"]
         )
         assert "Include the sales figures" in confirmation
-        assert "Due date (UTC): 2026-12-31 18:30" in confirmation
+        assert "Due date (Yerevan time): 2026-12-31 18:30" in confirmation
         assert "Priority: HIGH" in confirmation
     worker.transcribe_audio.assert_awaited_once()
 
@@ -345,7 +447,7 @@ async def test_worker_armenian_dictation_saves_all_fields(pipeline, queued_job):
         assert (
             task.title == "Զանգել Աննային" and task.description == "Քննարկել զեկույցը"
         )
-        assert task.due_date == datetime(2026, 12, 31, 18, 30, tzinfo=UTC)
+        assert task.due_date == datetime(2026, 12, 31, 14, 30, tzinfo=UTC)
         assert task.priority == "HIGH" and task.source == "TELEGRAM_VOICE"
         assert (
             await session.get(TranscriptionJob, queued_job)
@@ -359,7 +461,7 @@ async def test_worker_armenian_dictation_saves_all_fields(pipeline, queued_job):
             if "Զանգել Աննային" in row.payload["text"]
         )
         assert "Նկարագրություն: Քննարկել զեկույցը" in confirmation
-        assert "Վերջնաժամկետ (UTC): 2026-12-31 18:30" in confirmation
+        assert "Վերջնաժամկետ (Երևանի ժամանակով): 2026-12-31 18:30" in confirmation
         assert "Առաջնահերթություն: բարձր" in confirmation
 
 
@@ -585,6 +687,11 @@ def provider(tmp_path, monkeypatch):
     path = tmp_path / "voice.ogg"
     path.write_bytes(b"fixture")
     monkeypatch.setattr(audio.settings, "openai_api_key", "fixture-key")
+    monkeypatch.setattr(
+        audio.settings, "provider_base_url", "https://api.openai.com/v1"
+    )
+    monkeypatch.setattr(audio.settings, "whisper_model", "gpt-transcribe")
+    monkeypatch.setattr(audio.settings, "whisper_language", "auto")
     redis = AsyncMock()
     redis.__aenter__.return_value = redis
     redis.incr.return_value = 1
@@ -595,17 +702,76 @@ def provider(tmp_path, monkeypatch):
 
 
 @respx.mock
-async def test_whisper_retries_rate_limit_and_timeout(provider):
+async def test_transcription_retries_rate_limit_and_timeout(provider):
     path, _ = provider
     route = respx.post("https://api.openai.com/v1/audio/transcriptions")
     route.side_effect = [
         httpx.ReadTimeout("timeout"),
         httpx.Response(429),
-        httpx.Response(200, json={"text": "Call Anna", "language": "english"}),
+        httpx.Response(200, json={"text": "Call Anna", "languages": [{"code": "en"}]}),
     ]
     assert await audio.transcribe_audio(path) == ("Call Anna", "english")
     assert route.call_count == 3
     assert audio.asyncio.sleep.await_count == 2
+    request = route.calls.last.request
+    assert b'name="model"\r\n\r\ngpt-transcribe' in request.content
+    assert b'name="languages[]"\r\n\r\nhy' in request.content
+    assert b'name="languages[]"\r\n\r\nen' in request.content
+    assert b'name="language"' not in request.content
+    assert b"verbose_json" not in request.content
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "model,endpoint",
+    [
+        ("base", "http://local-whisper:8080/v1"),
+        ("whisper-1", "https://api.openai.com/v1"),
+    ],
+)
+async def test_legacy_transcription_payload_and_language(
+    provider, monkeypatch, model, endpoint
+):
+    path, _ = provider
+    monkeypatch.setattr(audio.settings, "whisper_model", model)
+    monkeypatch.setattr(audio.settings, "provider_base_url", endpoint)
+    monkeypatch.setattr(audio.settings, "whisper_language", "hy")
+    route = respx.post(f"{endpoint}/audio/transcriptions").respond(
+        200,
+        json={
+            "text": "Զանգել Աննային",
+            "language": "armenian",
+            "segments": [{"avg_logprob": -0.2, "no_speech_prob": 0.01}],
+        },
+    )
+    assert await audio.transcribe_audio(path) == ("Զանգել Աննային", "armenian")
+    body = route.calls.last.request.content
+    assert b'name="response_format"\r\n\r\nverbose_json' in body
+    assert b'name="language"\r\n\r\nhy' in body
+    assert b'name="languages[]"' not in body
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "segment,code",
+    [
+        ({"no_speech_prob": 0.8}, "no_clear_speech"),
+        ({"avg_logprob": -1.2}, "no_clear_speech"),
+        ({"avg_logprob": "bad"}, "invalid_transcript"),
+        (None, "invalid_transcript"),
+    ],
+)
+async def test_legacy_transcription_rejects_unusable_segments(
+    provider, monkeypatch, segment, code
+):
+    path, _ = provider
+    monkeypatch.setattr(audio.settings, "whisper_model", "whisper-1")
+    respx.post("https://api.openai.com/v1/audio/transcriptions").respond(
+        200,
+        json={"text": "invented speech", "language": "english", "segments": [segment]},
+    )
+    with pytest.raises(audio.AudioError, match=code):
+        await audio.transcribe_audio(path)
 
 
 @respx.mock
@@ -616,12 +782,18 @@ async def test_whisper_retries_rate_limit_and_timeout(provider):
         (httpx.Response(401), "provider_rejected"),
         (httpx.Response(200, json={"text": 1}), "invalid_transcript"),
         (
-            httpx.Response(200, json={"text": "Bonjour", "language": "french"}),
+            httpx.Response(
+                200, json={"text": "Bonjour", "languages": [{"code": "fr"}]}
+            ),
             "unsupported_language",
+        ),
+        (
+            httpx.Response(200, json={"text": "Call Anna", "languages": "invalid"}),
+            "invalid_transcript",
         ),
     ],
 )
-async def test_whisper_failures_controlled(provider, response, code):
+async def test_transcription_failures_controlled(provider, response, code):
     path, _ = provider
     respx.post("https://api.openai.com/v1/audio/transcriptions").return_value = response
     with pytest.raises(audio.AudioError, match=code):
@@ -676,30 +848,31 @@ async def test_webhook_secret_validation_and_health(monkeypatch):
 
 @respx.mock
 @pytest.mark.parametrize(
-    "segments,code",
+    "languages,code",
     [
-        ([{"no_speech_prob": 0.9}], "no_clear_speech"),
-        ([{"avg_logprob": -2}], "no_clear_speech"),
-        ([{"no_speech_prob": "nan"}], "no_clear_speech"),
-        ([{"avg_logprob": []}], "invalid_transcript"),
+        (None, "invalid_transcript"),
         ([None], "invalid_transcript"),
-        ({}, "invalid_transcript"),
+        ([{}], "invalid_transcript"),
+        ([{"code": 1}], "invalid_transcript"),
+        ([{"code": "fr"}], "unsupported_language"),
     ],
 )
-async def test_whisper_confidence_rejects_silence_noise_and_invalid_output(
-    provider, segments, code
+async def test_transcription_rejects_invalid_or_unsupported_languages(
+    provider, languages, code
 ):
     path, _ = provider
     respx.post("https://api.openai.com/v1/audio/transcriptions").respond(
         200,
-        json={"text": "invented speech", "language": "english", "segments": segments},
+        json={"text": "invented speech", "languages": languages},
     )
     with pytest.raises(audio.AudioError, match=code):
         await audio.transcribe_audio(path)
 
 
 @respx.mock
-async def test_whisper_language_preference_and_circuit_opens(provider, monkeypatch):
+async def test_transcription_language_preference_and_circuit_opens(
+    provider, monkeypatch
+):
     path, redis = provider
     monkeypatch.setattr(audio.settings, "whisper_language", "hy")
     route = respx.post("https://api.openai.com/v1/audio/transcriptions")
@@ -707,12 +880,12 @@ async def test_whisper_language_preference_and_circuit_opens(provider, monkeypat
         200,
         json={
             "text": "Զանգել Աննային",
-            "language": "armenian",
-            "segments": [{"no_speech_prob": 0.1, "avg_logprob": -0.1}],
+            "languages": [{"code": "hy"}],
         },
     )
     assert await audio.transcribe_audio(path) == ("Զանգել Աննային", "armenian")
-    assert b'name="language"\r\n\r\nhy' in route.calls.last.request.content
+    assert b'name="languages[]"\r\n\r\nhy' in route.calls.last.request.content
+    assert b'name="languages[]"\r\n\r\nen' not in route.calls.last.request.content
     redis.incr.return_value = 5
     route.respond(503)
     with pytest.raises(audio.AudioError, match="provider_unavailable"):
@@ -1002,7 +1175,7 @@ async def test_provider_usage_counts_attempts_and_failures(provider):
     route = respx.post("https://api.openai.com/v1/audio/transcriptions")
     route.side_effect = [
         httpx.Response(503),
-        httpx.Response(200, json={"text": "Call Anna", "language": "en"}),
+        httpx.Response(200, json={"text": "Call Anna", "languages": [{"code": "en"}]}),
     ]
     await audio.transcribe_audio(path)
     calls = [call.args[1:] for call in redis.hincrby.await_args_list]

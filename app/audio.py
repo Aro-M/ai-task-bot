@@ -257,20 +257,32 @@ async def transcribe_audio(path: Path) -> tuple[str, str | None]:
                 await redis.expire(metrics_key, 7 * 86400)
                 started = time.monotonic()
                 try:
-                    form = {
-                        "model": settings.whisper_model,
-                        "response_format": "verbose_json",
-                    }
-                    if settings.whisper_language != "auto":
-                        form["language"] = settings.whisper_language
+                    language_hints = (
+                        ["hy", "en"]
+                        if settings.whisper_language == "auto"
+                        else [settings.whisper_language]
+                    )
+                    fields = [("model", (None, settings.whisper_model))]
+                    if settings.whisper_model == "gpt-transcribe":
+                        fields.extend(
+                            ("languages[]", (None, lang)) for lang in language_hints
+                        )
+                    else:
+                        fields.append(("response_format", (None, "verbose_json")))
+                        if settings.whisper_language != "auto":
+                            fields.append(
+                                ("language", (None, settings.whisper_language))
+                            )
                     with path.open("rb") as audio:
                         response = await client.post(
                             f"{settings.provider_base_url.rstrip('/')}/audio/transcriptions",
                             headers={
                                 "Authorization": f"Bearer {settings.openai_api_key}"
                             },
-                            data=form,
-                            files={"file": ("voice.wav", audio, "audio/wav")},
+                            files=[
+                                *fields,
+                                ("file", ("voice.wav", audio, "audio/wav")),
+                            ],
                         )
                     response.raise_for_status()
                     result = response.json()
@@ -278,40 +290,50 @@ async def transcribe_audio(path: Path) -> tuple[str, str | None]:
                         result.get("text"), str
                     ):
                         raise AudioError("invalid_transcript")
-                    language = result.get("language")
-                    if language is not None and (
-                        not isinstance(language, str)
-                        or language
-                        not in {
-                            "en",
-                            "hy",
-                            "english",
-                            "armenian",
-                            "English",
-                            "Armenian",
-                        }
-                    ):
-                        raise AudioError("unsupported_language")
-                    segments = result.get("segments", [])
-                    if not isinstance(segments, list):
-                        raise AudioError("invalid_transcript")
-                    for segment in segments:
-                        if not isinstance(segment, dict):
+                    detected = result.get("languages")
+                    if settings.whisper_model != "gpt-transcribe":
+                        language = result.get("language")
+                        detected = [] if language is None else [{"code": language}]
+                        segments = result.get("segments", [])
+                        if not isinstance(segments, list):
                             raise AudioError("invalid_transcript")
-                        try:
-                            no_speech = float(segment.get("no_speech_prob", 0))
-                            confidence = float(segment.get("avg_logprob", 0))
-                        except (TypeError, ValueError):
-                            raise AudioError("invalid_transcript") from None
-                        if (
-                            not math.isfinite(no_speech)
-                            or not math.isfinite(confidence)
-                            or no_speech >= 0.6
-                            or confidence < -1
+                        for segment in segments:
+                            if not isinstance(segment, dict):
+                                raise AudioError("invalid_transcript")
+                            try:
+                                no_speech = float(segment.get("no_speech_prob", 0))
+                                confidence = float(segment.get("avg_logprob", 0))
+                            except (TypeError, ValueError):
+                                raise AudioError("invalid_transcript") from None
+                            if (
+                                not math.isfinite(no_speech)
+                                or not math.isfinite(confidence)
+                                or no_speech >= 0.6
+                                or confidence < -1
+                            ):
+                                raise AudioError("no_clear_speech")
+                    if not isinstance(detected, list):
+                        raise AudioError("invalid_transcript")
+                    languages: set[str] = set()
+                    for entry in detected:
+                        if not isinstance(entry, dict) or not isinstance(
+                            entry.get("code"), str
                         ):
-                            raise AudioError("no_clear_speech")
+                            raise AudioError("invalid_transcript")
+                        code = entry["code"].casefold()
+                        if code in {"hy", "hye", "armenian"}:
+                            languages.add("armenian")
+                        elif code in {"en", "eng", "english"}:
+                            languages.add("english")
+                        else:
+                            raise AudioError("unsupported_language")
                     await redis.delete("ai:circuit:failures")
                     await redis.hincrby(metrics_key, "accepted", 1)
+                    language = (
+                        "armenian"
+                        if "armenian" in languages
+                        else "english" if "english" in languages else None
+                    )
                     return result["text"], language
                 except (
                     httpx.TransportError,

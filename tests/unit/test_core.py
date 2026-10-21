@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import ValidationError
@@ -21,6 +22,12 @@ from app.services import (
     owned_task,
     update_task,
 )
+
+
+def yerevan_datetime(year, month, day, hour=0, minute=0):
+    return datetime(
+        year, month, day, hour, minute, tzinfo=ZoneInfo("Asia/Yerevan")
+    ).astimezone(UTC)
 
 
 @pytest.mark.parametrize(
@@ -123,12 +130,12 @@ def test_medium_voice_transcript_preserves_full_text_as_description():
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("Call tomorrow at 6 PM", datetime(2026, 10, 21, 18, tzinfo=UTC)),
-        ("Call today at 12 AM", datetime(2026, 10, 20, tzinfo=UTC)),
-        ("Call tomorrow 12:30 pm", datetime(2026, 10, 21, 12, 30, tzinfo=UTC)),
-        ("Զանգել վաղը 18:45", datetime(2026, 10, 21, 18, 45, tzinfo=UTC)),
-        ("Զանգել այսօր ժամը 6-ին", datetime(2026, 10, 20, tzinfo=UTC)),
-        ("Call 2026-12-31 at 23:59", datetime(2026, 12, 31, 23, 59, tzinfo=UTC)),
+        ("Call tomorrow at 6 PM", yerevan_datetime(2026, 10, 21, 18)),
+        ("Call today at 12 AM", yerevan_datetime(2026, 10, 20)),
+        ("Call tomorrow 12:30 pm", yerevan_datetime(2026, 10, 21, 12, 30)),
+        ("Զանգել վաղը 18:45", yerevan_datetime(2026, 10, 21, 18, 45)),
+        ("Զանգել այսօր ժամը 6-ին", yerevan_datetime(2026, 10, 20)),
+        ("Call 2026-12-31 at 23:59", yerevan_datetime(2026, 12, 31, 23, 59)),
     ],
 )
 def test_explicit_dates_extract_without_guessing_ambiguous_times(text, expected):
@@ -172,6 +179,22 @@ def test_conservative_extraction_clock_and_priority():
         extract_fields("Tomorrow", datetime(2026, 10, 20))
 
 
+def test_deadline_without_timezone_uses_yerevan_and_explicit_utc_is_preserved():
+    local = extract_fields("Title Call Anna. Due date 2026-10-22 at 10:00")
+    utc = extract_fields("Title Call Anna. Due date 2026-10-22 at 10:00 UTC")
+
+    assert local["due_date"] == datetime(2026, 10, 22, 6, tzinfo=UTC)
+    assert utc["due_date"] == datetime(2026, 10, 22, 10, tzinfo=UTC)
+
+
+def test_relative_deadline_uses_yerevan_calendar_day():
+    now = datetime(2026, 10, 20, 20, tzinfo=UTC)
+    fields = extract_fields("Title Call Anna. Due date tomorrow at 10:00", now)
+
+    expected = datetime(2026, 10, 22, 10, tzinfo=ZoneInfo("Asia/Yerevan"))
+    assert fields["due_date"] == expected.astimezone(UTC)
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -189,7 +212,7 @@ def test_dictated_fields_fill_the_create_form(text):
     task = TaskCreate(**extract_fields(text, datetime(2026, 10, 20, 10, tzinfo=UTC)))
     assert task.title == "Prepare report"
     assert task.description == "Include the sales figures"
-    assert task.due_date == datetime(2026, 10, 21, 18, tzinfo=UTC)
+    assert task.due_date == yerevan_datetime(2026, 10, 21, 18)
     assert task.priority == "HIGH"
 
 
@@ -202,7 +225,7 @@ def test_dictated_metadata_is_not_taken_from_description():
     assert fields == {
         "title": "Review notes",
         "description": "Yesterday we discussed high priority work for tomorrow at 6 PM",
-        "due_date": datetime(2026, 10, 20, tzinfo=UTC),
+        "due_date": yerevan_datetime(2026, 10, 20),
         "priority": "LOW",
     }
 
@@ -261,7 +284,7 @@ def test_dictated_english_clock(clock, expected):
         f"Title Call Anna. Due date tomorrow at {clock}",
         datetime(2026, 10, 20, 10, tzinfo=UTC),
     )
-    assert fields["due_date"] == datetime(2026, 10, 21, *expected, tzinfo=UTC)
+    assert fields["due_date"] == yerevan_datetime(2026, 10, 21, *expected)
 
 
 @pytest.mark.parametrize(
@@ -290,7 +313,7 @@ def test_armenian_and_mixed_dictation_fills_all_fields(text):
     task = TaskCreate(**extract_fields(text, datetime(2026, 10, 20, 10, tzinfo=UTC)))
     assert task.title == "Զանգել Աննային"
     assert task.description == "Քննարկել զեկույցը"
-    assert task.due_date == datetime(2026, 10, 21, 18, 30, tzinfo=UTC)
+    assert task.due_date == yerevan_datetime(2026, 10, 21, 18, 30)
     assert task.priority == "HIGH"
 
 
@@ -344,7 +367,7 @@ def test_armenian_explicit_24_hour_clock(clock, expected):
         f"Վերնագիր Զանգել։ Վերջնաժամկետ այսօր {clock}։",
         datetime(2026, 10, 20, 10, tzinfo=UTC),
     )
-    assert fields["due_date"] == datetime(2026, 10, 20, *expected, tzinfo=UTC)
+    assert fields["due_date"] == yerevan_datetime(2026, 10, 20, *expected)
 
 
 async def test_create_flushes_id_and_event_in_same_rollbackable_transaction(session):

@@ -103,7 +103,10 @@ async def test_telegram_text_voice_queue_sse_and_dashboard_crud(stack, live_api)
             ).respond(200, content=payload)
             whisper = provider.post(
                 f"{settings.provider_base_url}/audio/transcriptions"
-            ).respond(200, json={"text": "Զանգել Աննային վաղը", "language": "armenian"})
+            ).respond(
+                200,
+                json={"text": "Զանգել Աննային վաղը", "languages": [{"code": "hy"}]},
+            )
             # Let real browser requests through while intercepting external providers only.
             provider.route(host="127.0.0.1").pass_through()
             async with httpx.AsyncClient(
@@ -192,8 +195,11 @@ async def test_telegram_text_voice_queue_sse_and_dashboard_crud(stack, live_api)
 @pytest.mark.parametrize(
     "response,expected",
     [
-        ({"text": "", "language": "english"}, "invalid_transcript"),
-        ({"text": "Private text", "language": "unsupported"}, "unsupported_language"),
+        ({"text": "", "languages": [{"code": "en"}]}, "invalid_transcript"),
+        (
+            {"text": "Private text", "languages": [{"code": "fr"}]},
+            "unsupported_language",
+        ),
     ],
 )
 async def test_provider_invalid_output_creates_no_task(stack, response, expected):

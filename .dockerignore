@@ -15,7 +15,8 @@ frontend/.next
 frontend/out
 frontend/coverage
 frontend/playwright-report
-frontend/playwright-live-report
+frontend/playwright-report-live
+frontend/test-results-live
 frontend/nginx.generated.conf
 frontend/tsconfig.tsbuildinfo
 

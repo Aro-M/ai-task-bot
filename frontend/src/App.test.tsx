@@ -169,6 +169,19 @@ describe('task management', () => {
       'datetime',
       initial.created_at,
     );
+    const dueTime = document.querySelector(
+      'time[datetime="2020-01-03T12:30:00Z"]',
+    );
+    expect(dueTime).toHaveTextContent(
+      new Intl.DateTimeFormat(undefined, {
+        timeZone: 'Asia/Yerevan',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }).format(new Date(initial.due_date!)),
+    );
     expect(screen.getByText('Overdue')).toBeVisible();
     await actor.click(screen.getByRole('button', { name: 'New task' }));
     const dialog = screen.getByRole('dialog');
@@ -199,11 +212,12 @@ describe('task management', () => {
       description: 'Get the documents ready',
     });
     expect(new Date(tasks[0].due_date!).getTime()).toBe(
-      new Date('2026-11-01T09:30').getTime(),
+      new Date('2026-11-01T05:30:00.000Z').getTime(),
     );
     await actor.click(
       screen.getByRole('button', { name: 'Edit Prepare the launch' }),
     );
+    expect(screen.getByLabelText(/Due date/)).toHaveValue('2020-01-03T16:30');
     await actor.clear(screen.getByLabelText('Task title'));
     await actor.type(screen.getByLabelText('Task title'), 'Launch carefully');
     await actor.selectOptions(screen.getByLabelText('Priority'), 'LOW');

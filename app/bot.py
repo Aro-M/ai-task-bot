@@ -17,13 +17,13 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import TaskParserError, parse_task
 from app.audio import AudioError, validate_metadata
 from app.config import BOT_MESSAGES_PER_MINUTE, settings
 from app.db import Session
 from app.logging import configure_logging
 from app.models import Outbox, ProcessedUpdate, Task, TranscriptionJob, User
-from app.schemas import TaskCreate
-from app.services import DomainError, create_task, extract_fields, normalize_text
+from app.services import DomainError, create_task
 
 
 async def poll_updates(telegram: Bot) -> None:
@@ -81,15 +81,15 @@ configure_logging()
 HELP = (
     "Send a text or voice message to create a task. "
     "For separate fields, say: Title buy milk. Description two bottles. "
-    "Due date tomorrow at six PM UTC. Priority high. "
+    "Due date tomorrow at six PM. Priority high. "
     "Start with Title; description, due date and priority are optional. "
-    "Dates use UTC. New tasks start as To do. "
+    "Dates use Yerevan time unless you explicitly say UTC. New tasks start as To do. "
     "Voice audio is transcribed and temporary audio is deleted after processing. "
     "/tasks shows your latest tasks. /login gives a private dashboard login code."
     "\n\nՀայերեն կամ անգլերեն թելադրանքի օրինակ՝ "
     "Վերնագիր Զանգել Աննային։ Նկարագրություն Քննարկել զեկույցը։ "
-    "Վերջնաժամկետ վաղը ժամը 14:00 UTC։ Առաջնահերթություն բարձր։ "
-    "Կարող ես նաև խառնել երկու լեզուները։ Ժամերը UTC են․ Երևանի 18:00-ը՝ 14:00 UTC։"
+    "Վերջնաժամկետ վաղը ժամը 18:00։ Առաջնահերթություն բարձր։ "
+    "Կարող ես նաև խառնել երկու լեզուները։ Ժամերը Երևանի ժամանակով են, եթե UTC չնշես։"
 )
 
 
@@ -240,20 +240,32 @@ async def handle_update(update: dict[str, Any]) -> bool:
                 if text.startswith("/"):
                     reply(session, user, chat_id, HELP)
                 else:
-                    task = await create_task(
-                        session,
-                        user.id,
-                        TaskCreate(**extract_fields(normalize_text(text))),
-                        source="TELEGRAM_TEXT",
-                        source_key=f"telegram:{update_id}",
-                    )
-                    reply(session, user, chat_id, f"✅ Task created: {task.title}")
-            except (DomainError, ValueError):
+                    data = await parse_task(text)
+                    if data is None:
+                        reply(
+                            session,
+                            user,
+                            chat_id,
+                            "I didn't create a task. Tell me the action you want to add. / "
+                            "Առաջադրանք չստեղծեցի․ ասա՝ ինչ գործողություն ավելացնեմ։",
+                        )
+                    else:
+                        task = await create_task(
+                            session,
+                            user.id,
+                            data,
+                            source="TELEGRAM_TEXT",
+                            source_key=f"telegram:{update_id}",
+                        )
+                        reply(session, user, chat_id, f"✅ Task created: {task.title}")
+            except TaskParserError as exc:
+                reply(session, user, chat_id, str(exc))
+            except (DomainError, ValueError) as exc:
                 reply(
                     session,
                     user,
                     chat_id,
-                    "Please send task text containing 1–5000 characters.",
+                    str(exc) or "Please send task text containing 1–5000 characters.",
                 )
         elif isinstance(message.get("voice") or message.get("audio"), dict):
             audio = message.get("voice") or message["audio"]

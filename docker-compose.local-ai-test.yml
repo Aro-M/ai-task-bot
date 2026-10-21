@@ -9,6 +9,7 @@ services:
       RUN_LOCAL_AI: "1"
       PROVIDER_BASE_URL: http://local-whisper:8080/v1
       OPENAI_API_KEY: local-only-not-an-openai-key
+      TASK_PARSER_ENABLED: "false"
       WHISPER_MODEL: base
       WHISPER_COST_PER_MINUTE: "0"
     volumes: ["local_ai_models:/fixtures/local-ai:ro"]

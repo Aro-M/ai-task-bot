@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { Priority, Task, TaskInput } from './types';
+import { fromYerevanDateTimeLocal, toYerevanDateTimeLocal } from './dateTime';
 
 export function Dialog({
   title,
@@ -66,13 +67,6 @@ export function TaskDialog({
 }) {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  function localDate(value: string | null | undefined) {
-    if (!value) return '';
-    const date = new Date(value);
-    return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-      .toISOString()
-      .slice(0, 16);
-  }
   return (
     <Dialog
       title={task ? 'Edit task' : 'Make a little progress'}
@@ -102,7 +96,7 @@ export function TaskDialog({
                 description: String(data.get('description')).trim() || null,
                 priority: (data.get('priority') as Priority) || null,
                 due_date: data.get('due_date')
-                  ? new Date(String(data.get('due_date'))).toISOString()
+                  ? fromYerevanDateTimeLocal(String(data.get('due_date')))
                   : null,
               },
               task?.id,
@@ -141,11 +135,11 @@ export function TaskDialog({
         </label>
         <div className="form-row">
           <label>
-            Due date <span className="optional">optional</span>
+            Due date <span className="optional">Yerevan time, optional</span>
             <input
               type="datetime-local"
               name="due_date"
-              defaultValue={localDate(task?.due_date)}
+              defaultValue={toYerevanDateTimeLocal(task?.due_date)}
               disabled={saving}
             />
           </label>

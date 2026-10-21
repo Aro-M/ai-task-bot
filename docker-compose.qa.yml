@@ -7,6 +7,7 @@ x-qa-env: &qa-env
   TELEGRAM_BOT_TOKEN: "123456:test-bot-token"
   WEBHOOK_SECRET: qa-webhook-secret
   OPENAI_API_KEY: ""
+  TASK_PARSER_ENABLED: "false"
   FRONTEND_ORIGIN: ${TASKBOT_QA_ORIGIN:-http://localhost:18080}
 
 services:
@@ -52,3 +53,9 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+
+# Docker requires an explicit subnet to reserve the old API IP during replacement QA.
+networks:
+  default:
+    ipam:
+      config: [{subnet: 172.30.254.0/24}]

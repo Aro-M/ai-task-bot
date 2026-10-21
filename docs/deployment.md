@@ -1,19 +1,83 @@
-# Deployment and recovery
+# Deployment, updates and recovery
 
-The default local path is `docker compose up --build -d --wait`; edit a private `.env` first. Requires recent Compose v2 (2.24+). Application services have separate Dockerfiles under services/ and frontend/, using one common Python locked build so schema and clients cannot drift. Next uses static export with hashed hydration scripts and Nginx proxy/SSE. Readiness `/api/health/ready` checks DB/Redis/settings and 60-second expiring heartbeats for both worker roles; basic health does not require workers, avoiding startup dependency cycles. Production roles consume transcription/notifications with concurrency 4/1 and legacy queues drained for upgrade compatibility. Worker grace periods are 90/110 seconds; these assume the default 60-second job timeout.
+For a first local installation, follow [README](../README.md): create a Telegram bot, fill `.env`, run `docker compose up --build -d --wait`, then use `/login`. Docker Desktop/Engine with Compose 2.24.4+ is required. Local polling needs no public domain or inbound port. Keep `.env` and persistent database volumes private.
 
-Before enabling remote workflows, configure **private** repository/GHCR packages; protected `release`, `staging`, `production` GitHub Environments; required production/release reviewers; and dedicated self-hosted Linux runners labeled `taskbot-staging` or `taskbot-production`. Each runner must be on its own target host (both deployments bind loopback 8080), with Docker/Compose, gh, Python 3.12/uv, registry read permissions and a reviewed DEPLOY_DIRECTORY environment variable. Store `.env` in that absolute directory with restricted permissions, production HTTPS origin, real secrets and TELEGRAM_MODE=webhook. Terminate TLS at the edge, route to loopback 8080, retain database backups independently, and verify capacity/disk alerting. Do not allow untrusted pull requests on privileged deployment runners.
+## Public server from source
 
-CI performs locked installs, lint/types/tests, integration, security/secret scans, hadolint, Trivy lock-file vulnerabilities, deployable builds and browser journeys. `cd.yml` publishes immutable commit-SHA images after successful exact-commit CI from main and release approval. `deploy.yml` is separately manual: it validates a 40-character SHA with successful main-push CI, checks out that release, logs into private GHCR and invokes the reviewed deployment runner. The script pulls images, starts DB/Redis, stops consumers, runs migration, restarts services, waits for health and checks readiness, then records `.release-sha`. Both deployments need preconfigured environments; their names do not create manual approval by themselves. No workflow was triggered, image pushed or remote resource changed during implementation.
+These are operator instructions, not an automatically completed deployment. Use a dedicated Linux server, a domain whose DNS points to it, Docker/Compose and a TLS reverse proxy. Keep PostgreSQL/Redis private; Compose publishes only frontend on loopback `127.0.0.1:8080`. Never expose the development speech server.
 
-To review a local plan without effects:
+1. Clone the private repository on the server. Copy `.env.example` to `.env` only for a new install, replace all placeholders, then `chmod 600 .env`.
+2. Use fresh independent production secrets: `JWT_SECRET` and `WEBHOOK_SECRET` must each have at least 32 characters. Set the real Telegram token and OpenAI key. Configure API billing and model access independently.
+3. Set `ENVIRONMENT=production`, `TELEGRAM_MODE=webhook`, `FRONTEND_ORIGIN=https://YOUR_DOMAIN`. Leave the database/Redis Docker hostnames from the template; use the same database password in POSTGRES_PASSWORD and DATABASE_URL. Production requires official `https://api.openai.com/v1` and does not accept the free overlay.
+4. Run `docker compose up --build -d --wait`, followed by `docker compose ps` and `curl --fail http://localhost:8080/api/health/ready`.
+5. Configure a TLS reverse proxy for YOUR_DOMAIN to `127.0.0.1:8080`, including long-lived SSE without response buffering. For example, an installed [Caddy](https://caddyserver.com/docs/install) server can use this Caddyfile (replace the domain):
 
-```sh
-uv run python -m scripts.deploy --environment staging --tag FULL_40_CHARACTER_SHA --directory /srv/taskbot-staging --image-prefix ghcr.io/OWNER/REPOSITORY
+```caddyfile
+tasks.example.com {
+    reverse_proxy 127.0.0.1:8080 {
+        flush_interval -1
+    }
+}
 ```
 
-Use lowercase owner/repository. Only adding `--apply` executes it; the hosted approved workflow supplies that flag. The dedicated target `.env` must exist even for planning. The release overlay removes every application build and chooses images by prefix/SHA. All shell execution uses argument lists and validated inputs. Task data never goes into workflow input/logs. A backup is a required operator precondition, not something inferred from a successful schema migration.
+Caddy needs working DNS and inbound 80/443 for automatic certificate setup. Follow its service installation instructions and validate/reload that configuration. If using Nginx instead, install a valid TLS certificate and disable buffering/short timeouts for `/api/events`. Apply HSTS only after validating HTTPS. Restrict firewall/SSH appropriately for your deployment.
 
-Recovery procedure: record the previous `.release-sha`, take/verify a PostgreSQL backup, and stop writes before release. Pull or migration failure stops the workflow and does not claim success. If migration fails, keep consumers stopped, inspect sanitized errors and restore a verified backup if necessary. For an application-only rollback on a compatible schema, run the previous immutable image SHA with the same overlay and rerun readiness/CRUD smoke. For schema rollback, stop consumers, use the release-compatible Alembic downgrade (0003 maps new states back to legacy values), or restore the matching backup; never downgrade under new consumers. Rehearse on a **separate** staging database/volumes. Never run down -v on a real deployment. Automatic rollback is intentionally omitted because a failed migration or changed data can make image rollback unsafe.
+6. Confirm `https://YOUR_DOMAIN/api/health/ready` returns 200, then explicitly register the Telegram webhook:
 
-Release gates still requiring operator evidence: live private Telegram text/voice and Whisper accuracy/cost, HTTPS/webhook setup, exact-image OS scan, hosted protected workflow, backup restore and sustained capacity. Unit tests simulate release command order/readiness and cannot certify those external resources.
+```sh
+docker compose exec -T api python -m scripts.register_webhook https://YOUR_DOMAIN/telegram/webhook
+```
+
+The helper reads secrets internally and does not print a token-bearing URL. It preserves pending updates. Do not run a polling replica using this token at the same time. To switch back, follow README's explicit webhook deletion step before enabling polling.
+
+7. Send `/start`, `/login`, a text task and a voice task to the real bot. Verify all stored fields, deadline timezone and private dashboard updates. Check two distinct Telegram accounts cannot access each other's tasks. Confirm real model availability/cost. These are required acceptance checks, not implied by healthy containers.
+
+Use one polling replica if choosing polling; webhook deployments also need reviewed scaling and ingress controls. The common locked Python base is shared by independently configured API/bot/transcription/dispatcher/scheduler roles. The one-shot migration must exit successfully. Runtime workers consume separate queues at default concurrency 4/1. Basic health checks DB/Redis; `/api/health/ready` additionally checks settings and the expiring heartbeats of both worker roles. A running scheduler alone does not certify the whole system.
+
+## Updating an existing installation
+
+Record the current commit or image SHA, back up PostgreSQL, and preserve `.env`. For a clean source checkout, `git pull --ff-only` obtains the reviewed update. If Git reports local changes, review them rather than forcing a reset. Rebuild/recreate with `docker compose up --build -d --wait`, then check readiness and task CRUD/SSE. An `.env` edit requires recreated containers; a simple process restart keeps the old container environment.
+
+Plan a maintenance window for migrations and stop writes/consumers when a schema change requires it. The approved image deployment helper explicitly starts DB/Redis, stops consumers, migrates and then restarts services. Never downgrade while new consumers are running. Changing POSTGRES_PASSWORD in `.env` does not change an already initialized PostgreSQL volume's password.
+
+`docker compose down` preserves named volumes. **Never run `down -v` on a real deployment** unless intentional permanent data loss is the goal. Test targets use separate projects and disposable databases.
+
+## Backup and restore
+
+Take a private custom-format backup before releases. From the application directory, create a restricted backup directory and dump without printing data:
+
+```sh
+mkdir -p backups
+chmod 700 backups
+docker compose exec -T postgres pg_dump -U taskbot -d taskbot -Fc > backups/taskbot-before-release.dump
+chmod 600 backups/taskbot-before-release.dump
+```
+
+Choose a new filename each time instead of overwriting the last known good copy. `.dump` files are Git-ignored, but still need encrypted, access-controlled storage outside the server. Verify the dump can be read with `pg_restore --list` and rehearse a full restore into a **separate staging PostgreSQL database**. A successful dump command or table listing alone is not proof of restore correctness. Check restored row counts, ownership, migration version and application read/write behavior before relying on the backup.
+
+For an application-only rollback on a compatible schema, restart the previous immutable image SHA and repeat readiness/CRUD/SSE checks. For incompatible schemas, stop consumers/writes and use a reviewed release-compatible Alembic downgrade or restore the corresponding verified backup. Migration 0003 maps extended job states to legacy values on downgrade; 0004 drops admission ownership/history while preserving update replay IDs. These operations can lose detail. Automatic rollback is omitted because image rollback does not reverse changed data.
+
+## GitHub CI and approved image deployments
+
+`.github/workflows/ci.yml` runs locked installs, lint/types/unit/coverage, deterministic evaluations, mutations, PostgreSQL/Redis/Celery journeys, dependency/static/secret scans, Dockerfile/lock-file checks, deployable builds and desktop/mobile/three-engine browser journeys. It uploads artifacts even when a step fails. A push to main starts CI; inspect the result for the exact commit.
+
+Publishing and deployment are separate manual workflows. Before using them configure:
+
+- Private repository and private GHCR packages.
+- `release`, `staging`, `production` GitHub Environments with the required reviewers/access rules. An environment name alone does not create an approval gate.
+- Dedicated trusted self-hosted Linux runners labeled `taskbot-staging` and `taskbot-production`, one target per host, with Docker/Compose, gh, Python 3.12/uv and registry read access.
+- A reviewed absolute `DEPLOY_DIRECTORY`, production `.env` and independent backups on each target. Never run untrusted pull requests on privileged deployment runners.
+
+`cd.yml` manually publishes SHA-tagged images only after a successful exact-commit main CI and release environment approval. `deploy.yml` separately validates a full SHA with successful main-push CI, checks out that release, logs into private GHCR and invokes `scripts.deploy`. The release overlay selects images by prefix/SHA. The script waits for health/readiness and records `.release-sha`; failure does not claim success.
+
+A dry-run plan (still requires the target directory and its `.env`) is:
+
+```sh
+uv run python -m scripts.deploy --environment staging --tag FULL_40_CHARACTER_SHA --directory /srv/taskbot-staging --image-prefix ghcr.io/aro-m/ai-task-bot
+```
+
+Only `--apply` executes it; the hosted approved workflow supplies that flag. Do not add it until the deployment prerequisites and backup are ready.
+
+## Release evidence still needed
+
+Current local/CI evidence is recorded in [VERIFICATION.md](../VERIFICATION.md). Public readiness additionally needs the deployed HTTPS/webhook smoke, measured Armenian/English real speech acceptance and billing, an up-to-date OS scan of the exact deployable images, an actual backup restore rehearsal and sustained capacity monitoring. Tests of command order cannot certify a remote server, its reviewers, its TLS settings or its backups.

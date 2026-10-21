@@ -7,6 +7,7 @@ x-local-image: &local-image
 x-local-settings: &local-settings
   PROVIDER_BASE_URL: http://local-whisper:8080/v1
   OPENAI_API_KEY: local-only-not-an-openai-key
+  TASK_PARSER_ENABLED: "false"
   WHISPER_MODEL: base
   WHISPER_COST_PER_MINUTE: "0"
 
